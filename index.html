@@ -3,219 +3,140 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AR Game: Head Motion Tracking</title>
-    <!-- ดึงไลบรารี MediaPipe สำหรับตรวจจับใบหน้าผ่านกล้อง -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
-
+    <title>AR Game Debug</title>
     <style>
         body {
             margin: 0;
-            padding: 0;
-            background-color: #111;
-            color: white;
+            background: #111;
+            color: #fff;
             font-family: Arial, sans-serif;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
-            height: 100vh;
-            overflow: hidden;
+            justify-content: center;
+            min-height: 100vh;
         }
 
-        #game-container {
+        #game-box {
             position: relative;
-            width: 360px;
-            height: 480px;
-            border: 4px solid #00d2ff;
-            border-radius: 12px;
+            width: 320px;
+            height: 400px;
+            border: 3px solid #00d2ff;
+            border-radius: 10px;
             overflow: hidden;
+            background: #000;
         }
 
-        video { display: none; }
-
-        canvas {
+        video {
             width: 100%;
             height: 100%;
-            transform: scaleX(-1); /* กลับข้างแบบกระจกเงา */
+            object-fit: cover;
+            transform: scaleX(-1);
         }
 
-        #ui {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            right: 10px;
-            display: flex;
-            justify-content: space-between;
-            font-size: 18px;
-            font-weight: bold;
-            z-index: 10;
-            text-shadow: 2px 2px 4px #000;
-        }
-
-        #game-over-screen {
+        canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.85);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 20;
+            pointer-events: auto;
+        }
+
+        #controls {
+            margin-top: 15px;
+            text-align: center;
         }
 
         button {
             padding: 10px 20px;
-            font-size: 16px;
-            background-color: #00d2ff;
+            background: #00d2ff;
             border: none;
             border-radius: 5px;
-            cursor: pointer;
-            margin-top: 15px;
             font-weight: bold;
+            cursor: pointer;
+        }
+
+        #status {
+            margin-top: 10px;
+            color: #ffeb3b;
+            font-size: 14px;
         }
     </style>
 </head>
 <body>
 
-    <div id="game-container">
-        <video id="webcam" playsinline></video>
-        <canvas id="gameCanvas"></canvas>
-        
-        <div id="ui">
-            <span id="scoreText">คะแนน: 0</span>
-            <span>ขยับหัว ซ้าย-ขวา</span>
-        </div>
+    <h2>เกมทดสอบ AR (เปิดกล้อง)</h2>
 
-        <div id="game-over-screen" style="display: none;">
-            <h1 style="color: #ff4757;">GAME OVER!</h1>
-            <p id="finalScore">คะแนนของคุณ: 0</p>
-            <button onclick="restartGame()">เล่นอีกครั้ง</button>
-        </div>
+    <div id="game-box">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="gameCanvas" width="320" height="400"></canvas>
+    </div>
+
+    <div id="controls">
+        <button onclick="startCamera()">กดเพื่อเปิดกล้อง</button>
+        <div id="status">สถานะ: รอการเปิดกล้อง...</div>
     </div>
 
     <script>
-        const videoElement = document.getElementById('webcam');
-        const canvasElement = document.getElementById('gameCanvas');
-        const canvasCtx = canvasElement.getContext('2d');
-        const scoreText = document.getElementById('scoreText');
-        const gameOverScreen = document.getElementById('game-over-screen');
-        const finalScore = document.getElementById('finalScore');
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status');
 
-        canvasElement.width = 360;
-        canvasElement.height = 480;
+        let playerX = 160;
+        let isCameraActive = false;
 
-        let playerX = canvasElement.width / 2;
-        let score = 0;
-        let isGameOver = false;
-        let obstacles = [];
-
-        // ตั้งค่าระบบตรวจจับใบหน้า (MediaPipe Face Mesh)
-        const faceMesh = new FaceMesh({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-        });
-
-        faceMesh.setOptions({
-            maxNumFaces: 1,
-            refineLandmarks: false,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
-
-        // เมื่อระบบตรวจจับใบหน้าได้ในแต่ละเฟรม
-        faceMesh.onResults((results) => {
-            canvasCtx.save();
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            
-            // วาดภาพจากกล้องลงบน Canvas
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-
-            // ดึงพิกัดใบหน้า
-            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-                const landmarks = results.multiFaceLandmarks[0];
-                // ใช้พิกัดจุดปลายจมูก (Landmark หมายเลข 1) ในการระบุตำแหน่งหัว
-                const nose = landmarks[1]; 
+        // ฟังก์ชันเปิดกล้องแบบเสถียร
+        async function startCamera() {
+            statusText.innerText = "สถานะ: กำลังขอสิทธิ์เปิดกล้อง...";
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 320 }, height: { ideal: 400 }, facingMode: "user" },
+                    audio: false
+                });
                 
-                // แปลงพิกัดจมูกเป็นตำแหน่ง X บนหน้าจอ
-                playerX = nose.x * canvasElement.width;
+                video.srcObject = stream;
+                await video.play();
+                
+                isCameraActive = true;
+                statusText.innerText = "สถานะ: กล้องทำงานปกติ! (ลากเมาส์/แตะจอเพื่อขยับ)";
+            } catch (err) {
+                statusText.innerText = "เปิดกล้องไม่สำเร็จ: " + err.name + " - " + err.message;
+                console.error(err);
             }
+        }
 
-            if (!isGameOver) {
-                // วาดตัวละครผู้เล่น (วงกลมสีฟ้า) ตามตำแหน่งหัว
-                canvasCtx.beginPath();
-                canvasCtx.arc(playerX, canvasElement.height - 50, 20, 0, Math.PI * 2);
-                canvasCtx.fillStyle = '#00d2ff';
-                canvasCtx.fill();
-                canvasCtx.lineWidth = 3;
-                canvasCtx.strokeStyle = 'white';
-                canvasCtx.stroke();
+        // ระบบควบคุมสำรอง (ใช้เมาส์/สัมผัส) กรณีกล้องไม่จับหน้า
+        function handleMove(clientX) {
+            const rect = canvas.getBoundingClientRect();
+            playerX = clientX - rect.left;
+            if (playerX < 15) playerX = 15;
+            if (playerX > canvas.width - 15) playerX = canvas.width - 15;
+        }
 
-                // จัดการสิ่งกีดขวาง
-                updateObstacles();
-            }
-
-            canvasCtx.restore();
+        canvas.addEventListener('mousemove', (e) => handleMove(e.clientX));
+        canvas.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) handleMove(e.touches[0].clientX);
         });
 
-        // ระบบกล้องวิดีโอ
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await faceMesh.send({ image: videoElement });
-            },
-            width: 360,
-            height: 480
-        });
-        camera.start();
+        // ลูปวาดหน้าจอเกม
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        function spawnObstacle() {
-            if (isGameOver) return;
-            const size = Math.random() * 30 + 20;
-            const x = Math.random() * (canvasElement.width - size);
-            obstacles.push({ x, y: -size, size, speed: Math.random() * 2 + 3 });
+            // วาดตัวละครผู้เล่น (วงกลมสีฟ้า)
+            ctx.beginPath();
+            ctx.arc(playerX, 350, 15, 0, Math.PI * 2);
+            ctx.fillStyle = '#00d2ff';
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+
+            requestAnimationFrame(drawGame);
         }
 
-        function updateObstacles() {
-            for (let i = 0; i < obstacles.length; i++) {
-                let obs = obstacles[i];
-                obs.y += obs.speed;
-
-                // วาดกล่องสิ่งกีดขวางสีแดง
-                canvasCtx.fillStyle = '#ff4757';
-                canvasCtx.fillRect(obs.x, obs.y, obs.size, obs.size);
-
-                // ตรวจจับการชนกันระหว่างวงกลมผู้เล่นกับกล่อง
-                let dist = Math.hypot(playerX - (obs.x + obs.size/2), (canvasElement.height - 50) - (obs.y + obs.size/2));
-                if (dist < 20 + obs.size/2) {
-                    endGame();
-                }
-
-                // เมื่อสิ่งกีดขวางตกพ้นหน้าจอ
-                if (obs.y > canvasElement.height) {
-                    obstacles.splice(i, 1);
-                    score += 10;
-                    scoreText.innerText = `คะแนน: ${score}`;
-                    i--;
-                }
-            }
-        }
-
-        function endGame() {
-            isGameOver = true;
-            finalScore.innerText = `คะแนนของคุณ: ${score}`;
-            gameOverScreen.style.display = 'flex';
-        }
-
-        function restartGame() {
-            score = 0;
-            obstacles = [];
-            isGameOver = false;
-            scoreText.innerText = `คะแนน: ${score}`;
-            gameOverScreen.style.display = 'none';
-        }
-
-        setInterval(spawnObstacle, 1000);
+        drawGame();
     </script>
 </body>
 </html>
